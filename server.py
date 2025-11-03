@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import shutil
+import time
 import yaml
 from pathlib import Path
 from typing import Any, Optional, Dict, List
@@ -691,6 +692,51 @@ class GCPOpenShiftManager:
                 "error": f"Failed to write merged kubeconfig: {str(e)}"
             }
 
+    async def _wait_for_gateway_nodes(
+        self,
+        kubeconfig: str,
+        cluster_name: str,
+        timeout: int = 600
+    ) -> None:
+        """Wait for gateway nodes to be Ready after cloud prepare.
+
+        Args:
+            kubeconfig: Path to the cluster's kubeconfig file
+            cluster_name: Name of the cluster (for logging)
+            timeout: Maximum time to wait in seconds (default: 600)
+
+        Raises:
+            Exception: If gateway nodes don't become ready within timeout
+        """
+        logger.info(f"Waiting for gateway nodes to be ready in {cluster_name}...")
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+            # Check if gateway nodes exist and are Ready
+            returncode, stdout, stderr = await self.runner.run([
+                "kubectl", "get", "nodes",
+                "-l", "submariner.io/gateway=true",
+                "--kubeconfig", kubeconfig,
+                "-o", "jsonpath={.items[*].status.conditions[?(@.type=='Ready')].status}"
+            ])
+
+            if returncode == 0 and stdout.strip():
+                # Check if all gateway nodes are Ready (status contains "True")
+                statuses = stdout.strip().split()
+                if statuses and all(status == "True" for status in statuses):
+                    logger.info(f"Gateway nodes are ready in {cluster_name}")
+                    return
+
+            # Wait before checking again
+            elapsed = int(time.time() - start_time)
+            logger.info(f"Waiting for gateway nodes in {cluster_name}... ({elapsed}/{timeout}s)")
+            await asyncio.sleep(10)
+
+        raise Exception(
+            f"Gateway nodes not ready after {timeout}s for {cluster_name}. "
+            f"Cloud prepare may have failed or nodes are taking too long to become ready."
+        )
+
     async def deploy_submariner_full(
         self,
         cluster1_name: str,
@@ -937,6 +983,21 @@ class GCPOpenShiftManager:
             }
 
         logger.info("Cloud prepare completed on both clusters")
+
+        # Wait for gateway nodes to be ready before joining
+        logger.info("Waiting for gateway nodes to be ready on both clusters...")
+        try:
+            await asyncio.gather(
+                self._wait_for_gateway_nodes(kubeconfig1, cluster1_name),
+                self._wait_for_gateway_nodes(kubeconfig2, cluster2_name)
+            )
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Gateway nodes failed to become ready: {str(e)}"
+            }
+
+        logger.info("Gateway nodes are ready on both clusters")
 
         # Deploy broker on cluster 1
         logger.info("Deploying Submariner broker on cluster-1...")

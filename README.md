@@ -528,9 +528,15 @@ For issues related to:
 
 ## Version
 
-Current version: 1.1.0
+Current version: 1.1.1
 
 ## Changelog
+
+### 1.1.1 (2025-11-03)
+- **Fixed critical bug in deploy_submariner_full**: Added wait for gateway nodes to be ready after cloud prepare
+- Gateway nodes are now verified as Ready before proceeding with Submariner join operations
+- Prevents join failures when gateway nodes are still being provisioned
+- Improved error handling and logging for gateway node readiness checks
 
 ### 1.1.0 (2025-10-29)
 - Added `cloud_prepare` tool for Submariner infrastructure preparation (GCP, AWS, Azure, OpenStack)
